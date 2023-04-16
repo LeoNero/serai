@@ -544,11 +544,8 @@ impl SignableTransaction {
   /// if the transaction has already been signed and published.
   pub fn eventuality(&self) -> Option<Eventuality> {
     let inputs = self.inputs.iter().map(|input| input.key()).collect::<Vec<_>>();
-    let (tx_key, additional, outputs, id) = Self::prepare_payments(
-      self.r_seed.as_ref()?,
-      &inputs,
-      &mut self.payments.clone(),
-    );
+    let (tx_key, additional, outputs, id) =
+      Self::prepare_payments(self.r_seed.as_ref()?, &inputs, &mut self.payments.clone());
     #[allow(non_snake_case)]
     let Rs = outputs.iter().map(|output| output.R).collect();
     drop(outputs);

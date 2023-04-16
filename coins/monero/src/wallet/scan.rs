@@ -319,8 +319,7 @@ impl Scanner {
         } else {
           break;
         };
-        let (view_tag, shared_key, payment_id_xor) =
-          shared_key(self.pair.view.deref() * key, o);
+        let (view_tag, shared_key, payment_id_xor) = shared_key(self.pair.view.deref() * key, o);
 
         let payment_id =
           if let Some(PaymentId::Encrypted(id)) = payment_id.map(|id| id ^ payment_id_xor) {

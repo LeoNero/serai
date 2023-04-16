@@ -226,6 +226,26 @@ impl Rpc {
     Ok(self.rpc_call::<Option<()>, HeightResponse>("get_height", None).await?.height)
   }
 
+  pub async fn is_key_image_spent(&self, key: &[u8; 32]) -> Result<bool, RpcError> {
+    #[derive(Deserialize, Debug)]
+    struct KeyImageSpentResponse {
+      spent_status: Vec<u64>,
+    }
+
+    let res: KeyImageSpentResponse = self
+      .rpc_call(
+        "is_key_image_spent",
+        Some(json!({
+            "key_images": vec![hex::encode(key)],
+        })),
+      )
+      .await?;
+
+    let spent = res.spent_status[0];
+
+    Ok(spent != 0)
+  }
+
   pub async fn get_transactions(&self, hashes: &[[u8; 32]]) -> Result<Vec<Transaction>, RpcError> {
     if hashes.is_empty() {
       return Ok(vec![]);
