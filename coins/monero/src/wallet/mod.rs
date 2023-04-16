@@ -9,7 +9,7 @@ use curve25519_dalek::{
   edwards::{EdwardsPoint, CompressedEdwardsY},
 };
 
-use crate::{hash, hash_to_scalar, serialize::write_varint, transaction::Input};
+use crate::{hash, hash_to_scalar, serialize::write_varint};
 
 pub mod extra;
 pub(crate) use extra::{PaymentId, ExtraField, Extra};
@@ -31,45 +31,17 @@ mod send;
 pub use send::{
   Fee, TransactionError, Change, SignableTransaction, SignableTransactionBuilder, Eventuality,
 };
-#[cfg(feature = "multisig")]
-pub(crate) use send::InternalPayment;
-#[cfg(feature = "multisig")]
-pub use send::TransactionMachine;
-
-fn key_image_sort(x: &EdwardsPoint, y: &EdwardsPoint) -> std::cmp::Ordering {
-  x.compress().to_bytes().cmp(&y.compress().to_bytes()).reverse()
-}
-
-// https://gist.github.com/kayabaNerve/8066c13f1fe1573286ba7a2fd79f6100
-pub(crate) fn uniqueness(inputs: &[Input]) -> [u8; 32] {
-  let mut u = b"uniqueness".to_vec();
-  for input in inputs {
-    match input {
-      // If Gen, this should be the only input, making this loop somewhat pointless
-      // This works and even if there were somehow multiple inputs, it'd be a false negative
-      Input::Gen(height) => {
-        write_varint(height, &mut u).unwrap();
-      }
-      Input::ToKey { key_image, .. } => u.extend(key_image.compress().to_bytes()),
-    }
-  }
-  hash(&u)
-}
 
 // Hs("view_tag" || 8Ra || o), Hs(8Ra || o), and H(8Ra || 0x8d) with uniqueness inclusion in the
 // Scalar as an option
 #[allow(non_snake_case)]
-pub(crate) fn shared_key(
-  uniqueness: Option<[u8; 32]>,
-  ecdh: EdwardsPoint,
-  o: usize,
-) -> (u8, Scalar, [u8; 8]) {
+pub(crate) fn shared_key(ecdh: EdwardsPoint, o: usize) -> (u8, Scalar, [u8; 8]) {
   // 8Ra
   let mut output_derivation = ecdh.mul_by_cofactor().compress().to_bytes().to_vec();
 
   let mut payment_id_xor = [0; 8];
   payment_id_xor
-    .copy_from_slice(&hash(&[output_derivation.as_ref(), [0x8d].as_ref()].concat())[.. 8]);
+    .copy_from_slice(&hash(&[output_derivation.as_ref(), [0x8d].as_ref()].concat())[..8]);
 
   // || o
   write_varint(&o.try_into().unwrap(), &mut output_derivation).unwrap();
@@ -77,11 +49,7 @@ pub(crate) fn shared_key(
   let view_tag = hash(&[b"view_tag".as_ref(), &output_derivation].concat())[0];
 
   // uniqueness ||
-  let shared_key = if let Some(uniqueness) = uniqueness {
-    [uniqueness.as_ref(), &output_derivation].concat().to_vec()
-  } else {
-    output_derivation
-  };
+  let shared_key = output_derivation;
 
   (view_tag, hash_to_scalar(&shared_key), payment_id_xor)
 }
@@ -89,7 +57,7 @@ pub(crate) fn shared_key(
 pub(crate) fn amount_encryption(amount: u64, key: Scalar) -> [u8; 8] {
   let mut amount_mask = b"amount".to_vec();
   amount_mask.extend(key.to_bytes());
-  (amount ^ u64::from_le_bytes(hash(&amount_mask)[.. 8].try_into().unwrap())).to_le_bytes()
+  (amount ^ u64::from_le_bytes(hash(&amount_mask)[..8].try_into().unwrap())).to_le_bytes()
 }
 
 fn amount_decryption(amount: [u8; 8], key: Scalar) -> u64 {

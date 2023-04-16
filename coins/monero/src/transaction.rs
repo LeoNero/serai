@@ -166,13 +166,13 @@ pub struct TransactionPrefix {
 impl TransactionPrefix {
   pub(crate) fn fee_weight(ring_len: usize, inputs: usize, outputs: usize, extra: usize) -> usize {
     // Assumes Timelock::None since this library won't let you create a TX with a timelock
-    1 + 1 +
-      varint_len(inputs) +
-      (inputs * Input::fee_weight(ring_len)) +
-      1 +
-      (outputs * Output::fee_weight()) +
-      varint_len(extra) +
-      extra
+    1 + 1
+      + varint_len(inputs)
+      + (inputs * Input::fee_weight(ring_len))
+      + 1
+      + (outputs * Output::fee_weight())
+      + varint_len(extra)
+      + extra
   }
 
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
@@ -218,8 +218,8 @@ impl Transaction {
     outputs: usize,
     extra: usize,
   ) -> usize {
-    TransactionPrefix::fee_weight(protocol.ring_len(), inputs, outputs, extra) +
-      RctSignatures::fee_weight(protocol, inputs, outputs)
+    TransactionPrefix::fee_weight(protocol.ring_len(), inputs, outputs, extra)
+      + RctSignatures::fee_weight(protocol, inputs, outputs)
   }
 
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
@@ -252,7 +252,7 @@ impl Transaction {
     };
 
     if prefix.version == 1 {
-      for _ in 0 .. prefix.inputs.len() {
+      for _ in 0..prefix.inputs.len() {
         signatures.push((read_scalar(r)?, read_scalar(r)?));
       }
       rct_signatures.base.fee = prefix

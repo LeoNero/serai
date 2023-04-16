@@ -22,13 +22,6 @@ use crate::{
   serialize::*,
 };
 
-#[cfg(feature = "multisig")]
-mod multisig;
-#[cfg(feature = "multisig")]
-pub use multisig::{ClsagDetails, ClsagAddendum, ClsagMultisig};
-#[cfg(feature = "multisig")]
-pub(crate) use multisig::add_key_image_share;
-
 lazy_static! {
   static ref INV_EIGHT: Scalar = Scalar::from(8u8).invert();
 }
@@ -142,7 +135,7 @@ fn core(
 
   // Truncate it for the round transcript, altering the DST as needed
   to_hash.truncate(((2 * n) + 1) * 32);
-  for i in 0 .. ROUND.len() {
+  for i in 0..ROUND.len() {
     to_hash[PREFIX.len() + i] = ROUND[i];
   }
   // Unfortunately, it's I D pseudo_out instead of pseudo_out I D, meaning this needs to be
@@ -172,7 +165,7 @@ fn core(
 
   // Perform the core loop
   let mut c1 = CtOption::new(Scalar::zero(), Choice::from(0));
-  for i in (start .. end).map(|i| i % n) {
+  for i in (start..end).map(|i| i % n) {
     // This will only execute once and shouldn't need to be constant time. Making it constant time
     // removes the risk of branch prediction creating timing differences depending on ring index
     // however
@@ -224,7 +217,7 @@ impl Clsag {
     let H = hash_to_point(input.decoys.ring[r][0]);
     let D = H * z;
     let mut s = Vec::with_capacity(input.decoys.ring.len());
-    for _ in 0 .. input.decoys.ring.len() {
+    for _ in 0..input.decoys.ring.len() {
       s.push(random_scalar(rng));
     }
     let ((D, p, c), c1) =
@@ -244,7 +237,7 @@ impl Clsag {
   ) -> Vec<(Clsag, EdwardsPoint)> {
     let mut res = Vec::with_capacity(inputs.len());
     let mut sum_pseudo_outs = Scalar::zero();
-    for i in 0 .. inputs.len() {
+    for i in 0..inputs.len() {
       let mut mask = random_scalar(rng);
       if i == (inputs.len() - 1) {
         mask = sum_outputs - sum_pseudo_outs;
@@ -260,8 +253,8 @@ impl Clsag {
         mask,
         &msg,
         nonce.deref() * &ED25519_BASEPOINT_TABLE,
-        nonce.deref() *
-          hash_to_point(inputs[i].2.decoys.ring[usize::from(inputs[i].2.decoys.i)][0]),
+        nonce.deref()
+          * hash_to_point(inputs[i].2.decoys.ring[usize::from(inputs[i].2.decoys.i)][0]),
       );
       clsag.s[usize::from(inputs[i].2.decoys.i)] =
         (-((p * inputs[i].0.deref()) + c)) + nonce.deref();

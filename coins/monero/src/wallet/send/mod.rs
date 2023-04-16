@@ -17,9 +17,6 @@ use curve25519_dalek::{
 };
 use dalek_ff_group as dfg;
 
-#[cfg(feature = "multisig")]
-use frost::FrostError;
-
 use crate::{
   Protocol, Commitment, hash, random_scalar,
   serialize::{
@@ -36,19 +33,14 @@ use crate::{
   rpc::{Rpc, RpcError},
   wallet::{
     address::{Network, AddressSpec, MoneroAddress},
-    ViewPair, SpendableOutput, Decoys, PaymentId, ExtraField, Extra, key_image_sort, uniqueness,
-    shared_key, commitment_mask, amount_encryption,
+    ViewPair, SpendableOutput, Decoys, PaymentId, ExtraField, Extra, shared_key, commitment_mask,
+    amount_encryption,
     extra::{ARBITRARY_DATA_MARKER, MAX_ARBITRARY_DATA_SIZE},
   },
 };
 
 mod builder;
 pub use builder::SignableTransactionBuilder;
-
-#[cfg(feature = "multisig")]
-mod multisig;
-#[cfg(feature = "multisig")]
-pub use multisig::TransactionMachine;
 
 #[allow(non_snake_case)]
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
@@ -63,7 +55,6 @@ struct SendOutput {
 impl SendOutput {
   #[allow(non_snake_case)]
   fn internal(
-    unique: [u8; 32],
     output: (usize, (MoneroAddress, u64)),
     ecdh: EdwardsPoint,
     R: EdwardsPoint,
@@ -71,8 +62,7 @@ impl SendOutput {
     let o = output.0;
     let output = output.1;
 
-    let (view_tag, shared_key, payment_id_xor) =
-      shared_key(Some(unique).filter(|_| output.0.is_guaranteed()), ecdh, o);
+    let (view_tag, shared_key, payment_id_xor) = shared_key(ecdh, o);
 
     (
       SendOutput {
@@ -91,12 +81,10 @@ impl SendOutput {
 
   fn new(
     r: &Zeroizing<Scalar>,
-    unique: [u8; 32],
     output: (usize, (MoneroAddress, u64)),
   ) -> (SendOutput, Option<[u8; 8]>) {
     let address = output.1 .0;
     SendOutput::internal(
-      unique,
       output,
       r.deref() * address.view,
       if !address.is_subaddress() {
@@ -109,10 +97,9 @@ impl SendOutput {
 
   fn change(
     ecdh: EdwardsPoint,
-    unique: [u8; 32],
     output: (usize, (MoneroAddress, u64)),
   ) -> (SendOutput, Option<[u8; 8]>) {
-    SendOutput::internal(unique, output, ecdh, ED25519_BASEPOINT_POINT)
+    SendOutput::internal(output, ecdh, ED25519_BASEPOINT_POINT)
   }
 }
 
@@ -142,9 +129,6 @@ pub enum TransactionError {
   ClsagError(ClsagError),
   #[error("invalid transaction ({0})")]
   InvalidTransaction(RpcError),
-  #[cfg(feature = "multisig")]
-  #[error("frost error {0}")]
-  FrostError(FrostError),
 }
 
 async fn prepare_inputs<R: RngCore + CryptoRng>(
@@ -393,7 +377,6 @@ impl SignableTransaction {
     seed: &Zeroizing<[u8; 32]>,
     inputs: &[EdwardsPoint],
     payments: &mut Vec<InternalPayment>,
-    uniqueness: [u8; 32],
   ) -> (EdwardsPoint, Vec<Zeroizing<Scalar>>, Vec<SendOutput>, Option<[u8; 8]>) {
     let mut rng = {
       // Hash the inputs into the seed so we don't re-use Rs
@@ -434,8 +417,8 @@ impl SignableTransaction {
           change.address.is_subaddress()
         }
       })
-      .count() !=
-      0;
+      .count()
+      != 0;
 
     // We need additional keys if we have any subaddresses
     let mut additional = subaddresses;
@@ -484,7 +467,7 @@ impl SignableTransaction {
           let use_dedicated = additional && payment.0.is_subaddress();
           let r = if use_dedicated { &dedicated } else { &tx_key };
 
-          let (mut output, payment_id) = SendOutput::new(r, uniqueness, (o, payment));
+          let (mut output, payment_id) = SendOutput::new(r, (o, payment));
           if modified_change_ecdh {
             debug_assert_eq!(tx_public_key, output.R);
           }
@@ -502,7 +485,7 @@ impl SignableTransaction {
           // Instead of rA, use Ra, where R is r * subaddress_spend_key
           // change.view must be Some as if it's None, this payment would've been downcast
           let ecdh = tx_public_key * change.view.unwrap().deref();
-          SendOutput::change(ecdh, uniqueness, (o, (change.address, amount)))
+          SendOutput::change(ecdh, (o, (change.address, amount)))
         }
       };
 
@@ -565,10 +548,6 @@ impl SignableTransaction {
       self.r_seed.as_ref()?,
       &inputs,
       &mut self.payments.clone(),
-      // Lie about the uniqueness, used when determining output keys/commitments yet not the
-      // ephemeral keys, which is want we want here
-      // While we do still grab the outputs variable, it's so we can get its Rs
-      [0; 32],
     );
     #[allow(non_snake_case)]
     let Rs = outputs.iter().map(|output| output.R).collect();
@@ -586,11 +565,7 @@ impl SignableTransaction {
     })
   }
 
-  fn prepare_transaction<R: RngCore + CryptoRng>(
-    &mut self,
-    rng: &mut R,
-    uniqueness: [u8; 32],
-  ) -> (Transaction, Scalar) {
+  fn prepare_transaction<R: RngCore + CryptoRng>(&mut self, rng: &mut R) -> (Transaction, Scalar) {
     // If no seed for the ephemeral keys was provided, make one
     let r_seed = self.r_seed.clone().unwrap_or_else(|| {
       let mut res = Zeroizing::new([0; 32]);
@@ -602,7 +577,6 @@ impl SignableTransaction {
       &r_seed,
       &self.inputs.iter().map(|input| input.key()).collect::<Vec<_>>(),
       &mut self.payments,
-      uniqueness,
     );
     // This function only cares if additional keys were necessary, not what they were
     let additional = !additional.is_empty();
@@ -679,17 +653,8 @@ impl SignableTransaction {
       images.push(generate_key_image(&offset));
       offset.zeroize();
     }
-    images.sort_by(key_image_sort);
 
-    let (mut tx, mask_sum) = self.prepare_transaction(
-      rng,
-      uniqueness(
-        &images
-          .iter()
-          .map(|image| Input::ToKey { amount: 0, key_offsets: vec![], key_image: *image })
-          .collect::<Vec<_>>(),
-      ),
-    );
+    let (mut tx, mask_sum) = self.prepare_transaction(rng);
 
     let signable =
       prepare_inputs(rng, rpc, self.protocol.ring_len(), &self.inputs, spend, &mut tx).await?;
@@ -734,13 +699,9 @@ impl Eventuality {
       return false;
     }
 
-    // Generate the outputs. This is TX-specific due to uniqueness.
-    let (_, _, outputs, _) = SignableTransaction::prepare_payments(
-      &self.r_seed,
-      &self.inputs,
-      &mut self.payments.clone(),
-      uniqueness(&tx.prefix.inputs),
-    );
+    // Generate the outputs.
+    let (_, _, outputs, _) =
+      SignableTransaction::prepare_payments(&self.r_seed, &self.inputs, &mut self.payments.clone());
 
     for (o, (expected, actual)) in outputs.iter().zip(tx.prefix.outputs.iter()).enumerate() {
       // Verify the output, commitment, and encrypted amount.
@@ -748,9 +709,9 @@ impl Eventuality {
         amount: 0,
         key: expected.dest.compress(),
         view_tag: Some(expected.view_tag).filter(|_| matches!(self.protocol, Protocol::v16)),
-      } != actual) ||
-        (Some(&expected.commitment.calculate()) != tx.rct_signatures.base.commitments.get(o)) ||
-        (Some(&expected.amount) != tx.rct_signatures.base.ecdh_info.get(o))
+      } != actual)
+        || (Some(&expected.commitment.calculate()) != tx.rct_signatures.base.commitments.get(o))
+        || (Some(&expected.amount) != tx.rct_signatures.base.ecdh_info.get(o))
       {
         return false;
       }

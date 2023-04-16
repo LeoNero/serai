@@ -138,22 +138,11 @@ macro_rules! test {
       async fn $name() {
         use core::{ops::Deref, any::Any};
         use std::collections::HashSet;
-        #[cfg(feature = "multisig")]
-        use std::collections::HashMap;
 
         use zeroize::Zeroizing;
         use rand_core::OsRng;
 
         use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-
-        #[cfg(feature = "multisig")]
-        use transcript::{Transcript, RecommendedTranscript};
-        #[cfg(feature = "multisig")]
-        use frost::{
-          curve::Ed25519,
-          Participant,
-          tests::{THRESHOLD, key_gen},
-        };
 
         use monero_serai::{
           random_scalar,
@@ -167,87 +156,42 @@ macro_rules! test {
 
         type Builder = SignableTransactionBuilder;
 
-        // Run each function as both a single signer and as a multisig
+        // Run each function as a single signer
         #[allow(clippy::redundant_closure_call)]
-        for multisig in [false, true] {
-          // Only run the multisig variant if multisig is enabled
-          if multisig {
-            #[cfg(not(feature = "multisig"))]
-            continue;
-          }
+        let spend = Zeroizing::new(random_scalar(&mut OsRng));
 
-          let spend = Zeroizing::new(random_scalar(&mut OsRng));
-          #[cfg(feature = "multisig")]
-          let keys = key_gen::<_, Ed25519>(&mut OsRng);
+        let spend_pub = spend.deref() * &ED25519_BASEPOINT_TABLE;
 
-          let spend_pub = if !multisig {
-            spend.deref() * &ED25519_BASEPOINT_TABLE
-          } else {
-            #[cfg(not(feature = "multisig"))]
-            panic!("Multisig branch called without the multisig feature");
-            #[cfg(feature = "multisig")]
-            keys[&Participant::new(1).unwrap()].group_key().0
-          };
+        let rpc = rpc().await;
 
-          let rpc = rpc().await;
+        let view = ViewPair::new(spend_pub, Zeroizing::new(random_scalar(&mut OsRng)));
+        let addr = view.address(Network::Mainnet, AddressSpec::Standard);
 
-          let view = ViewPair::new(spend_pub, Zeroizing::new(random_scalar(&mut OsRng)));
-          let addr = view.address(Network::Mainnet, AddressSpec::Standard);
+        let miner_tx = get_miner_tx_output(&rpc, &view).await;
 
-          let miner_tx = get_miner_tx_output(&rpc, &view).await;
-
-          let builder = SignableTransactionBuilder::new(
+        let builder = SignableTransactionBuilder::new(
             rpc.get_protocol().await.unwrap(),
             rpc.get_fee().await.unwrap(),
             Some(Change::new(
-              &ViewPair::new(
-                &random_scalar(&mut OsRng) * &ED25519_BASEPOINT_TABLE,
-                Zeroizing::new(random_scalar(&mut OsRng))
-              ),
-              false
+                &ViewPair::new(
+                    &random_scalar(&mut OsRng) * &ED25519_BASEPOINT_TABLE,
+                    Zeroizing::new(random_scalar(&mut OsRng))
+                ),
+                false
             )),
-          );
+        );
 
-          let sign = |tx: SignableTransaction| {
+        let sign = |tx: SignableTransaction| {
             let rpc = rpc.clone();
             let spend = spend.clone();
-            #[cfg(feature = "multisig")]
-            let keys = keys.clone();
             async move {
-              if !multisig {
                 tx.sign(&mut OsRng, &rpc, &spend).await.unwrap()
-              } else {
-                #[cfg(not(feature = "multisig"))]
-                panic!("Multisig branch called without the multisig feature");
-                #[cfg(feature = "multisig")]
-                {
-                  let mut machines = HashMap::new();
-                  for i in (1 ..= THRESHOLD).map(|i| Participant::new(i).unwrap()) {
-                    machines.insert(
-                      i,
-                      tx
-                        .clone()
-                        .multisig(
-                          &rpc,
-                          keys[&i].clone(),
-                          RecommendedTranscript::new(b"Monero Serai Test Transaction"),
-                          rpc.get_height().await.unwrap() - 10,
-                        )
-                        .await
-                        .unwrap(),
-                    );
-                  }
-
-                  frost::tests::sign_without_caching(&mut OsRng, machines, &[])
-                }
-              }
             }
-          };
+        };
 
-          // TODO: Generate a distinct wallet for each transaction to prevent overlap
-          let next_addr = addr;
+        let next_addr = addr;
 
-          let temp = Box::new({
+        let temp = Box::new({
             let mut builder = builder.clone();
             builder.add_input(miner_tx);
             let (tx, state) = ($first_tx)(rpc.clone(), builder, next_addr).await;
@@ -257,18 +201,18 @@ macro_rules! test {
             mine_until_unlocked(&rpc, &random_address().2.to_string(), signed.hash()).await;
             let tx = rpc.get_transaction(signed.hash()).await.unwrap();
             let scanner =
-              Scanner::from_view(view.clone(), Some(HashSet::new()));
+            Scanner::from_view(view.clone(), Some(HashSet::new()));
             ($first_checks)(rpc.clone(), tx, scanner, state).await
-          });
-          #[allow(unused_variables, unused_mut, unused_assignments)]
-          let mut carried_state: Box<dyn Any> = temp;
+        });
+        #[allow(unused_variables, unused_mut, unused_assignments)]
+        let mut carried_state: Box<dyn Any> = temp;
 
-          $(
+        $(
             let (tx, state) = ($tx)(
-              rpc.clone(),
-              builder.clone(),
-              next_addr,
-              *carried_state.downcast().unwrap()
+                rpc.clone(),
+                builder.clone(),
+                next_addr,
+                *carried_state.downcast().unwrap()
             ).await;
 
             let signed = sign(tx).await;
@@ -277,13 +221,12 @@ macro_rules! test {
             let tx = rpc.get_transaction(signed.hash()).await.unwrap();
             #[allow(unused_assignments)]
             {
-              let scanner =
+                let scanner =
                 Scanner::from_view(view.clone(), Some(HashSet::new()));
-              carried_state =
+                carried_state =
                 Box::new(($checks)(rpc.clone(), tx, scanner, state).await);
             }
-          )*
-        }
+        )*
       }
     }
   }

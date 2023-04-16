@@ -61,8 +61,8 @@ pub enum AddressSpec {
 
 impl AddressType {
   pub fn is_subaddress(&self) -> bool {
-    matches!(self, AddressType::Subaddress) ||
-      matches!(self, AddressType::Featured { subaddress: true, .. })
+    matches!(self, AddressType::Subaddress)
+      || matches!(self, AddressType::Featured { subaddress: true, .. })
   }
 
   pub fn payment_id(&self) -> Option<[u8; 8]> {
@@ -228,10 +228,10 @@ impl<B: AddressBytes> Address<B> {
     }
 
     let mut meta = AddressMeta::from_byte(raw[0])?;
-    let spend = CompressedEdwardsY(raw[1 .. 33].try_into().unwrap())
+    let spend = CompressedEdwardsY(raw[1..33].try_into().unwrap())
       .decompress()
       .ok_or(AddressError::InvalidKey)?;
-    let view = CompressedEdwardsY(raw[33 .. 65].try_into().unwrap())
+    let view = CompressedEdwardsY(raw[33..65].try_into().unwrap())
       .decompress()
       .ok_or(AddressError::InvalidKey)?;
     let mut read = 65;
@@ -262,10 +262,10 @@ impl<B: AddressBytes> Address<B> {
     }
 
     if let AddressType::Integrated(ref mut id) = meta.kind {
-      id.copy_from_slice(&raw[(read - 8) .. read]);
+      id.copy_from_slice(&raw[(read - 8)..read]);
     }
     if let AddressType::Featured { payment_id: Some(ref mut id), .. } = meta.kind {
-      id.copy_from_slice(&raw[(read - 8) .. read]);
+      id.copy_from_slice(&raw[(read - 8)..read]);
     }
 
     Ok(Address { meta, spend, view })

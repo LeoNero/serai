@@ -12,7 +12,7 @@ use crate::{
   block::Block,
   rpc::{Rpc, RpcError},
   wallet::{
-    PaymentId, Extra, address::SubaddressIndex, Scanner, uniqueness, shared_key, amount_decryption,
+    PaymentId, Extra, address::SubaddressIndex, Scanner, shared_key, amount_decryption,
     commitment_mask,
   },
 };
@@ -127,7 +127,7 @@ impl Metadata {
       payment_id: read_bytes(r)?,
       arbitrary_data: {
         let mut data = vec![];
-        for _ in 0 .. read_u32(r)? {
+        for _ in 0..read_u32(r)? {
           let len = read_byte(r)?;
           data.push(read_raw_vec(read_byte, usize::from(len), r)?);
         }
@@ -319,11 +319,8 @@ impl Scanner {
         } else {
           break;
         };
-        let (view_tag, shared_key, payment_id_xor) = shared_key(
-          if self.burning_bug.is_none() { Some(uniqueness(&tx.prefix.inputs)) } else { None },
-          self.pair.view.deref() * key,
-          o,
-        );
+        let (view_tag, shared_key, payment_id_xor) =
+          shared_key(self.pair.view.deref() * key, o);
 
         let payment_id =
           if let Some(PaymentId::Encrypted(id)) = payment_id.map(|id| id ^ payment_id_xor) {
